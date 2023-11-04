@@ -29,7 +29,7 @@ ark-crypto-primitives = {version = "0.4.0", features = ["sponge","r1cs","snark"]
 ark-r1cs-std = { version = "0.4.0", default-features = false }
 ark-relations = { version = "0.4.0", default-features = false, optional = true }
 ark-snark = { version = "0.4.0", default-features = false }
-ark-groth16 = { version = "0.3.0" }
+ark-groth16 = { version = "0.4.0" }
 ark-bw6-761 = { version = "0.4.0" }
 ark-poly-commit = { version = "0.4.0" }
 ark-poly = {version = "0.4.0"}

@@ -1,25 +1,62 @@
 use ark_ec::pairing::Pairing;
-use std::borrow::Borrow;
-
+use std::{borrow::Borrow, marker::PhantomData};
+use ark_r1cs_std::prelude::*;
 use crate::{
   math::Math,
   sparse_mlpoly::{SparsePolyEntry, SparsePolynomial},
   unipoly::UniPoly,
+  poseidon_transcript::PoseidonTranscript,
 };
-
+use ark_crypto_primitives::sponge::constraints::AbsorbGadget;
+use crate::ark_std::One;
+use crate::mipp::MippProof;
 use ark_ff::PrimeField;
-
+use ark_ff::BigInteger;
 use ark_crypto_primitives::sponge::{
   constraints::CryptographicSpongeVar,
   poseidon::{constraints::PoseidonSpongeVar, PoseidonConfig},
 };
-use ark_poly_commit::multilinear_pc::data_structures::Commitment;
+use ark_poly_commit::multilinear_pc::{
+  data_structures::{Commitment, CommitterKey, Proof, VerifierKey},
+  MultilinearPC,
+};
 use ark_r1cs_std::{
   alloc::{AllocVar, AllocationMode},
   fields::fp::FpVar,
   prelude::{EqGadget, FieldVar},
+
 };
+
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, Namespace, SynthesisError};
+
+pub struct PoseidonTranscripVar2<E,IV>
+where
+E: Pairing,
+IV: PairingVar<E>,
+{
+  pub cs: ConstraintSystemRef<<E as Pairing>::BaseField>,
+  pub sponge: PoseidonSpongeVar<<E as Pairing>::BaseField>,
+  _iv: PhantomData<IV>,
+}
+
+impl<E,IV> PoseidonTranscripVar2<E,IV>
+where
+  E: Pairing,
+  IV: PairingVar<E>,
+  IV::G1Var: CurveVar<E::G1, E::BaseField>,
+  IV::G1Var: AbsorbGadget<<E as Pairing>::BaseField>,
+{
+  fn new(cs: ConstraintSystemRef<<E as Pairing>::BaseField>, params: &PoseidonConfig<<E as Pairing>::BaseField>) -> Self {
+    let mut sponge = PoseidonSpongeVar::new(cs.clone(), params);
+    Self { cs, sponge, _iv: PhantomData}
+  }
+
+  fn append(&mut self, input: IV::G1Var) -> Result<(), SynthesisError> {
+    self.sponge.absorb(&input)
+  }
+
+}
+
 
 pub struct PoseidonTranscripVar<F>
 where
@@ -477,3 +514,97 @@ pub struct VerifierConfig<E: Pairing> {
 //     Ok(())
 //   }
 // }
+struct MippTUVar<E,IV>
+where
+  E:Pairing,
+  IV: PairingVar<E>,
+  IV::G1Var: CurveVar<E::G1, E::BaseField>,
+  IV::GTVar: FieldVar<E::TargetField, E::BaseField>
+{
+  tc: IV::GTVar,
+  uc: IV::G1Var,
+}
+struct TestudoCommVerifier<E, IV>
+where
+    E: Pairing,
+    IV: PairingVar<E>,
+{
+    transcript: PoseidonTranscript<E::ScalarField>,
+    vk: VerifierKey<E>,
+    U: Commitment<E>,
+    point: Vec<E::ScalarField>,
+    v: E::ScalarField,
+    pst_proof: Proof<E>,
+    mipp_proof: MippProof<E>,
+    T: E::TargetField,
+    _iv: PhantomData<IV>,
+}
+impl<E, IV> ConstraintSynthesizer<<E as Pairing>::BaseField> for TestudoCommVerifier<E, IV>
+where
+    E: Pairing,
+    IV: PairingVar<E>,
+    IV::G1Var: CurveVar<E::G1, E::BaseField>,
+    IV::G2Var: CurveVar<E::G2, E::BaseField>,
+    IV::GTVar: FieldVar<E::TargetField, E::BaseField>,
+{
+    fn generate_constraints(
+        self,
+        cs: ConstraintSystemRef<<E as Pairing>::BaseField>,
+    ) -> Result<(), SynthesisError> {
+
+      // allocate point
+      let mut point_var = Vec::new();
+      for p in self.point.clone().into_iter() {
+          let scalar_in_fq =
+              &E::BaseField::from_bigint(<E::BaseField as PrimeField>::BigInt::from_bits_le(
+                  p.into_bigint().to_bits_le().as_slice(),
+              ))
+              .unwrap();
+          let p_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
+          point_var.push(p_var);
+      }
+      let len = point_var.len();
+      let odd = if len % 2 == 1 { 1 } else { 0 };
+      let a_var = &point_var[0..len / 2 + odd];
+      let b_var = &point_var[len / 2 + odd..len];
+
+      // start mipp verify
+      // start allocate struct mipp proof
+      // allocate comms_u
+      let mut comms_u_var = Vec::new();
+      for (first,second) in self.mipp_proof.comms_u.clone().into_iter() {
+          let first_var = IV::G1Var::new_input(cs.clone(), || Ok(first))?;
+          let second_var = IV::G1Var::new_input(cs.clone(), || Ok(second))?;
+          comms_u_var.push((first_var,second_var));
+      }
+      // allocate comms_t
+      let mut comms_t_var = Vec::new();
+      for (first,second) in self.mipp_proof.comms_t.clone().into_iter() {
+          let first_var = IV::GTVar::new_input(cs.clone(), || Ok(first))?;
+          let second_var = IV::GTVar::new_input(cs.clone(), || Ok(second))?;
+          comms_t_var.push((first_var,second_var));
+      }
+
+      let mut xs = Vec::new();
+      let mut xs_inv = Vec::new();
+      let mut final_y = E::ScalarField::one();
+
+      // start allocate T
+      let T_var = IV::GTVar::new_input(cs.clone(), || Ok(self.T))?;
+      // start allocate U.g_product
+      let U_g_product_var = IV::G1Var::new_input(cs.clone(), || Ok(self.U.g_product))?;
+
+      let final_res_var = MippTUVar {
+        tc: T_var.clone(),
+        uc: U_g_product_var,
+      };
+
+      // create transcriptVar from transcript
+      let params = self.transcript.params;
+      let transcript_var = PoseidonTranscripVar2::new(cs.clone(), &params);
+
+      transcript_var.append(U_g_product_var);
+      
+      Ok(())
+    }
+}
