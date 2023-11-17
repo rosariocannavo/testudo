@@ -36,11 +36,13 @@ mod timer;
 pub(crate) mod transcript;
 mod unipoly;
 
-pub mod parameters;
-
+mod circuit_verifier;
 mod constraints;
+pub mod parameters;
 pub mod poseidon_transcript;
-
+mod prova;
+mod prova2;
+mod prova3;
 use core::cmp::max;
 use errors::R1CSError;
 
