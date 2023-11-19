@@ -1,4 +1,4 @@
-use crate::mipp::MippProof;
+use crate::mipp::{MippProof, self};
 use ark_ec::{pairing::Pairing, scalar_mul::variable_base::VariableBaseMSM, CurveGroup};
 use ark_ff::One;
 use ark_poly_commit::multilinear_pc::{
@@ -211,6 +211,8 @@ impl<E: Pairing> Polynomial<E> {
     let timer_mipp_proof = Timer::new("mipp_prove");
     let mipp_proof =
       MippProof::<E>::prove(transcript, ck, comms, chis.to_vec(), h_vec, &c_u, t).unwrap();
+
+
     timer_mipp_proof.stop();
 
     let timer_proof = Timer::new("pst_open");

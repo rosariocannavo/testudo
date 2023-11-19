@@ -24,11 +24,7 @@ impl<F: PrimeField> Transcript for PoseidonTranscript<F> {
     point
       .serialize_with_mode(&mut buf, Compress::No)
       .expect("serialization failed");
-    println!("STAMPO VEC BYTE");
-    for v in buf.clone() {
-      print!("{} - ", v);
-    }
-    println!();
+   
     self.sponge.absorb(&buf);
   }
 

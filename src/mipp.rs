@@ -25,6 +25,7 @@ pub struct MippProof<E: Pairing> {
   pub final_a: E::G1Affine,
   pub final_h: E::G2Affine,
   pub pst_proof_h: ProofG1<E>,
+  pub rs: Vec<E::ScalarField>,
 }
 
 impl<E: Pairing> MippProof<E> {
@@ -139,7 +140,8 @@ impl<E: Pairing> MippProof<E> {
       .map(|_| transcript.challenge_scalar::<E::ScalarField>(b"random_point"))
       .collect();
 
-    println!("Prover");
+    println!("LEN OF rs inside naive prover: {}", rs.len());
+    println!("Naive Prover rs[0]");
     println!("{}", rs[0]);
     let pst_proof_h = MultilinearPC::<E>::open_g1(ck, &poly, &rs);
 
@@ -149,6 +151,7 @@ impl<E: Pairing> MippProof<E> {
       final_a,
       final_h,
       pst_proof_h,
+      rs,
     })
   }
 
@@ -280,7 +283,9 @@ impl<E: Pairing> MippProof<E> {
       rs.push(r);
     }
 
-    println!("Verifier 1");
+    println!("LEN OF rs naive verifier: {}", rs.len());
+
+    println!("Naive verifier rs[0]");
     println!("{}", rs[0]);
     // Given p_h is structured as defined above, the verifier can compute
     // p_h(rs) by themselves in O(m) time
@@ -289,8 +294,6 @@ impl<E: Pairing> MippProof<E> {
       .map(|i| E::ScalarField::one() + rs[i].mul(xs_inv[m - i - 1]) - rs[i])
       .product();
 
-    println!("Verifier 2");
-    println!("{}", rs[0]);
     let comm_h = CommitmentG2 {
       nv: m,
       h_product: proof.final_h,

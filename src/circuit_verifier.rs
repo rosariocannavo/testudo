@@ -34,11 +34,12 @@ use ark_r1cs_std::{
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, Namespace, SynthesisError};
 use ark_serialize::Compress;
 use digest::generic_array::typenum::True;
+use itertools::assert_equal;
 use std::ops::AddAssign;
 use std::ops::Mul;
 use std::ops::MulAssign;
 use std::{borrow::Borrow, marker::PhantomData};
-
+use ark_serialize::CanonicalSerialize;
 struct MippTUVar<E, IV>
 where
   E: Pairing,
@@ -96,6 +97,7 @@ where
   pst_proof: Proof<E>,
   mipp_proof: MippProof<E>,
   T: E::TargetField,
+  naive_rs_test: Vec<E::ScalarField>,
   _iv: PhantomData<IV>,
 }
 impl<E, IV> Clone for TestudoCommVerifier<E, IV>
@@ -113,6 +115,7 @@ where
       pst_proof: self.pst_proof.clone(),
       mipp_proof: self.mipp_proof.clone(),
       T: self.T.clone(),
+      naive_rs_test: self.naive_rs_test.clone(),
       _iv: self._iv,
     }
   }
@@ -155,6 +158,7 @@ where
       b_var.to_vec(),
       self.U.g_product,
       &self.T,
+      self.naive_rs_test,
     );
 
     assert!(res_mipp.unwrap() == true);
@@ -187,6 +191,9 @@ where
   IV::G2Var: CurveVar<E::G2, E::BaseField>,
   IV::GTVar: FieldVar<E::TargetField, E::BaseField>,
 {
+  println!("rs arrived inside the check2 gadget as variable");
+  println!("{}",point_var[0].value().unwrap());
+
   let vk_g_var = IV::G1Var::new_input(cs.clone(), || Ok(vk.g))?;
   let vk_h_var = IV::G2Var::new_input(cs.clone(), || Ok(vk.h))?;
   let mut vk_gmask_var = Vec::new();
@@ -240,7 +247,7 @@ where
   let right_ml = IV::miller_loop(&pairing_lefts_var, &pairing_rights_var)?;
   let right = IV::final_exponentiation(&right_ml)?;
 
-  //left.enforce_equal(&right).unwrap();
+  left.enforce_equal(&right).unwrap();
   Ok(true)
 }
 
@@ -319,6 +326,7 @@ fn mipp_verify_gadget<E: Pairing, IV: PairingVar<E>>(
   point_var: Vec<FpVar<<E>::BaseField>>,
   U: E::G1Affine,
   T: &<E as Pairing>::TargetField,
+  naive_rs_test: Vec<E::ScalarField>,
 ) -> Result<bool, Error>
 where
   IV::G1Var: CurveVar<E::G1, E::BaseField>,
@@ -358,25 +366,66 @@ where
   let params: PoseidonConfig<E::BaseField> = params_to_base_field::<E>();
   let mut transcript_var = PoseidonSpongeVar::new(cs.clone(), &params);
 
-  let U_g_product_var_bytes = U_g_product_var.to_bytes()?;
+  let mut U_g_product_var_buf = Vec::new();
+    U_g_product_var.value().unwrap()
+      .serialize_with_mode(&mut U_g_product_var_buf, Compress::No)
+      .expect("serialization failed");
+  let mut U_g_product_var_bytes = Vec::new();
+  for x in U_g_product_var_buf {
+    U_g_product_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+  }
+
   transcript_var.absorb(&U_g_product_var_bytes)?;
+  
 
   let one_var = FpVar::new_input(cs.clone(), || Ok(E::BaseField::one()))?;
   for (i, (comm_u, comm_t)) in comms_u_var.iter().zip(comms_t_var.iter()).enumerate() {
     let (comm_u_l, comm_u_r) = comm_u;
     let (comm_t_l, comm_t_r) = comm_t;
-    // Fiat-Shamir challenge
 
-    let comm_u_l_bytes = comm_u_l.to_bytes()?;
-    let comm_u_r_bytes = comm_u_r.to_bytes()?;
+    // Fiat-Shamir challenge
+    let mut comm_u_l_buf = Vec::new();
+    comm_u_l.value().unwrap()
+      .serialize_with_mode(&mut comm_u_l_buf, Compress::No)
+      .expect("serialization failed");
+    let mut comm_u_l_bytes = Vec::new();
+    for x in comm_u_l_buf {
+      comm_u_l_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+    }
+
+    let mut comm_u_r_buf = Vec::new();
+    comm_u_r.value().unwrap()
+      .serialize_with_mode(&mut comm_u_r_buf, Compress::No)
+      .expect("serialization failed");
+    let mut comm_u_r_bytes = Vec::new();
+    for x in comm_u_r_buf {
+      comm_u_r_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+    }
+
+
     transcript_var.absorb(&comm_u_l_bytes)?;
     transcript_var.absorb(&comm_u_r_bytes)?;
     // ATTENTION
-    let comm_t_l_bytes = comm_t_l.to_bytes()?;
+    let mut comm_t_l_buf = Vec::new();
+    comm_t_l.value().unwrap()
+      .serialize_with_mode(&mut comm_t_l_buf, Compress::No)
+      .expect("serialization failed");
+    let mut comm_t_l_bytes = Vec::new();
+    for x in comm_t_l_buf {
+      comm_t_l_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+    }
     transcript_var.absorb(&comm_t_l_bytes)?;
-    let comm_t_r_bytes = comm_t_r.to_bytes()?;
+
+    let mut comm_t_r_buf = Vec::new();
+    comm_t_r.value().unwrap()
+      .serialize_with_mode(&mut comm_t_r_buf, Compress::No)
+      .expect("serialization failed");
+    let mut comm_t_r_bytes = Vec::new();
+    for x in comm_t_r_buf {
+      comm_t_r_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+    }
     transcript_var.absorb(&comm_t_r_bytes)?;
-    // transcript_var.absorb(comm_t_r);
+
     let c_inv_var = transcript_var.squeeze_field_elements(1).unwrap().remove(0);
     let c_var = c_inv_var.inverse().unwrap();
 
@@ -443,14 +492,46 @@ where
     h_product: proof.final_h,
   };
 
+  //convert naive_rs_test: Vec<E::ScalarField>, to Vec<E::BaseField>,
+
+  println!("LEN OF rs inside circuit: {}", naive_rs_test.len());
+  println!("Naive Prover rs[0] injected in the circuit");
+  println!("{}", naive_rs_test[0]);
+
+
+
+  let mut naive_rs_test_base_var = Vec::new();
+  for p in naive_rs_test.clone().into_iter(){
+      let scalar_in_fq = &E::BaseField::from_bigint(<E::BaseField as PrimeField>::BigInt::from_bits_le(p.into_bigint().to_bits_le().as_slice())).unwrap();
+      let p_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
+      naive_rs_test_base_var.push(p_var);
+  }
+
+
+  println!("circuit VAR rs[0] after the conversion in Fp<BaseField>");
+  println!("{}", naive_rs_test_base_var[0].value().unwrap());
+
+  for i in 0..naive_rs_test_base_var.len() {
+    println!("variable: {}: {}",i,naive_rs_test_base_var[i].value().unwrap());
+    println!();
+    println!("naive: {}: {}",i, naive_rs_test[i]);
+    println!();
+  }
+  println!("ASSERT OK");
+
+
   let check_h_var = check_2_gadget::<E, IV>(
     cs.clone(),
     vk.clone(),
     &comm_h,
-    &rs,
+    //&rs,
+    &naive_rs_test_base_var,
     v_var,
     &proof.pst_proof_h,
   );
+
+
+
   let check_h = check_h_var.unwrap();
   assert!(check_h.clone() == true);
   let final_a_var = IV::G1Var::new_input(cs.clone(), || Ok(proof.final_a))?;
@@ -535,6 +616,21 @@ mod tests {
 
     let (u, pst_proof, mipp_proof) = pl.open(&mut prover_transcript, comm_list, &ck, &r, &t);
 
+    let naive_rs_test = mipp_proof.rs.clone();
+    let mut verifier_transcript = PoseidonTranscript::new(&params);
+
+    let res = Polynomial::verify(
+      &mut verifier_transcript,
+      &vk,
+      &u,
+      &r,
+      v,
+      &pst_proof,
+      &mipp_proof,
+      &t,
+    );
+
+
     let circuit = TestudoCommVerifier {
       vk,
       U: u,
@@ -543,6 +639,7 @@ mod tests {
       pst_proof,
       mipp_proof,
       T: t,
+      naive_rs_test,
       _iv: PhantomData::<IV>,
     };
 
