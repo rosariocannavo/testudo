@@ -16,7 +16,9 @@ use ark_crypto_primitives::sponge::{
 use ark_crypto_primitives::Error;
 use ark_ec::pairing::Pairing;
 use ark_ec::AffineRepr;
+use ark_ec::CurveGroup;
 use ark_ff::BigInteger;
+use ark_ff::Field;
 use ark_ff::PrimeField;
 use ark_poly_commit::multilinear_pc::data_structures::CommitmentG2;
 use ark_poly_commit::multilinear_pc::data_structures::ProofG1;
@@ -24,6 +26,7 @@ use ark_poly_commit::multilinear_pc::{
   data_structures::{Commitment, CommitterKey, Proof, VerifierKey},
   MultilinearPC,
 };
+use ark_r1cs_std::fields::nonnative::NonNativeFieldVar;
 use ark_r1cs_std::groups::bls12::G1Var;
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::{
@@ -32,14 +35,16 @@ use ark_r1cs_std::{
   prelude::{EqGadget, FieldVar},
 };
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, Namespace, SynthesisError};
+use ark_serialize::CanonicalSerialize;
 use ark_serialize::Compress;
 use digest::generic_array::typenum::True;
-use itertools::assert_equal;
 use std::ops::AddAssign;
 use std::ops::Mul;
 use std::ops::MulAssign;
 use std::{borrow::Borrow, marker::PhantomData};
-use ark_serialize::CanonicalSerialize;
+
+type BasePrimeField<E> = <<<E as Pairing>::G1 as CurveGroup>::BaseField as Field>::BasePrimeField;
+
 struct MippTUVar<E, IV>
 where
   E: Pairing,
@@ -84,21 +89,19 @@ pub struct CommitmentG2Var<E: Pairing, IV: PairingVar<E>> {
   pub h_product: IV::G2Var,
 }
 
-struct TestudoCommVerifier<E, IV>
+pub struct TestudoCommVerifier<E, IV>
 where
   E: Pairing,
   IV: PairingVar<E>,
 {
-  //transcript: PoseidonTranscript<E::ScalarField>,
-  vk: VerifierKey<E>,
-  U: Commitment<E>,
-  point: Vec<E::ScalarField>,
-  v: E::ScalarField,
-  pst_proof: Proof<E>,
-  mipp_proof: MippProof<E>,
-  T: E::TargetField,
-  naive_rs_test: Vec<E::ScalarField>,
-  _iv: PhantomData<IV>,
+  pub vk: VerifierKey<E>,
+  pub U: Commitment<E>,
+  pub point: Vec<E::ScalarField>,
+  pub v: E::ScalarField,
+  pub pst_proof: Proof<E>,
+  pub mipp_proof: MippProof<E>,
+  pub T: E::TargetField,
+  pub _iv: PhantomData<IV>,
 }
 impl<E, IV> Clone for TestudoCommVerifier<E, IV>
 where
@@ -107,7 +110,6 @@ where
 {
   fn clone(&self) -> Self {
     Self {
-      // transcript: self.transcript.clone(),
       vk: self.vk.clone(),
       U: self.U.clone(),
       point: self.point.clone(),
@@ -115,7 +117,6 @@ where
       pst_proof: self.pst_proof.clone(),
       mipp_proof: self.mipp_proof.clone(),
       T: self.T.clone(),
-      naive_rs_test: self.naive_rs_test.clone(),
       _iv: self._iv,
     }
   }
@@ -128,9 +129,6 @@ where
   IV::G1Var: CurveVar<E::G1, E::BaseField>,
   IV::G2Var: CurveVar<E::G2, E::BaseField>,
   IV::GTVar: FieldVar<E::TargetField, E::BaseField>,
-  IV::G1Var: AbsorbGadget<E::BaseField>,
-  // IV::GTVar: AbsorbGadget<E::BaseField>,
-  //<IV as ark_r1cs_std::pairing::PairingVar<E>>::GTVar: AbsorbGadget<<E as Pairing>::BaseField>
 {
   fn generate_constraints(
     self,
@@ -139,11 +137,8 @@ where
     // allocate point
     let mut point_var = Vec::new();
     for p in self.point.clone().into_iter() {
-      let scalar_in_fq = &E::BaseField::from_bigint(
-        <E::BaseField as PrimeField>::BigInt::from_bits_le(p.into_bigint().to_bits_le().as_slice()),
-      )
-      .unwrap();
-      let p_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
+      let p_var =
+        NonNativeFieldVar::<E::ScalarField, E::BaseField>::new_input(cs.clone(), || Ok(p))?;
       point_var.push(p_var);
     }
     let len = point_var.len();
@@ -158,7 +153,6 @@ where
       b_var.to_vec(),
       self.U.g_product,
       &self.T,
-      self.naive_rs_test,
     );
 
     assert!(res_mipp.unwrap() == true);
@@ -182,8 +176,8 @@ fn check_2_gadget<E: Pairing, IV: PairingVar<E>>(
   cs: ConstraintSystemRef<E::BaseField>,
   vk: VerifierKey<E>,
   commitment: &CommitmentG2<E>,
-  point_var: &Vec<FpVar<<E>::BaseField>>,
-  value_var: FpVar<<E as Pairing>::BaseField>,
+  point_var: &Vec<NonNativeFieldVar<E::ScalarField, E::BaseField>>,
+  value_var: NonNativeFieldVar<E::ScalarField, E::BaseField>,
   proof: &ProofG1<E>,
 ) -> Result<bool, Error>
 where
@@ -191,9 +185,6 @@ where
   IV::G2Var: CurveVar<E::G2, E::BaseField>,
   IV::GTVar: FieldVar<E::TargetField, E::BaseField>,
 {
-  println!("rs arrived inside the check2 gadget as variable");
-  println!("{}",point_var[0].value().unwrap());
-
   let vk_g_var = IV::G1Var::new_input(cs.clone(), || Ok(vk.g))?;
   let vk_h_var = IV::G2Var::new_input(cs.clone(), || Ok(vk.h))?;
   let mut vk_gmask_var = Vec::new();
@@ -255,7 +246,7 @@ fn check_gadget<E: Pairing, IV: PairingVar<E>>(
   cs: ConstraintSystemRef<E::BaseField>,
   vk: VerifierKey<E>,
   commitment: Commitment<E>,
-  point_var: &Vec<FpVar<<E>::BaseField>>,
+  point_var: &Vec<NonNativeFieldVar<E::ScalarField, E::BaseField>>,
   value: E::ScalarField,
   proof: Proof<E>,
 ) -> Result<bool, Error>
@@ -278,7 +269,10 @@ where
     <E::BaseField as PrimeField>::BigInt::from_bits_le(value.into_bigint().to_bits_le().as_slice()),
   )
   .unwrap();
-  let value_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
+  //let value_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
+
+  let value_var = NonNativeFieldVar::<E::ScalarField, E::BaseField>::new_input(cs.clone(), || Ok(value))?;
+
   // allocate proof
   let mut proofs_var = Vec::new();
   for proof in proof.proofs.clone().into_iter() {
@@ -300,8 +294,8 @@ where
 
   //computing other part of the circuit
   let pairing_lefts_var: Vec<_> = (0..vk.nv)
-            .map(|i| vk_gmask_var[i].clone() - res_var[i].clone()) //.map(|i| vk_gmask_var[i].clone() - g_mul_var[i].clone())
-            .collect();
+    .map(|i| vk_gmask_var[i].clone() - res_var[i].clone()) //.map(|i| vk_gmask_var[i].clone() - g_mul_var[i].clone())
+    .collect();
 
   let mut pairing_lefts_prep = Vec::new();
   for var in pairing_lefts_var.clone().into_iter() {
@@ -315,7 +309,7 @@ where
 
   let right_ml = IV::miller_loop(&pairing_lefts_prep, &pairing_right_prep)?;
   let right = IV::final_exponentiation(&right_ml).unwrap();
-  left.enforce_equal(&right); // OK
+  left.enforce_equal(&right)?; // OK
   Ok(true)
 }
 
@@ -323,10 +317,9 @@ fn mipp_verify_gadget<E: Pairing, IV: PairingVar<E>>(
   cs: ConstraintSystemRef<E::BaseField>,
   vk: VerifierKey<E>,
   proof: &MippProof<E>,
-  point_var: Vec<FpVar<<E>::BaseField>>,
+  point_var: Vec<NonNativeFieldVar<E::ScalarField, E::BaseField>>,
   U: E::G1Affine,
   T: &<E as Pairing>::TargetField,
-  naive_rs_test: Vec<E::ScalarField>,
 ) -> Result<bool, Error>
 where
   IV::G1Var: CurveVar<E::G1, E::BaseField>,
@@ -349,8 +342,10 @@ where
 
   let mut xs = Vec::new();
   let mut xs_inv = Vec::new();
-  let final_y = E::BaseField::one();
-  let mut final_y_var = FpVar::new_input(cs.clone(), || Ok(final_y))?;
+
+  let final_y = E::ScalarField::one();
+  let mut final_y_var =
+    NonNativeFieldVar::<E::ScalarField, E::BaseField>::new_witness(cs.clone(), || Ok(final_y))?;
 
   // start allocate T
   let T_var = IV::GTVar::new_input(cs.clone(), || Ok(T))?;
@@ -359,74 +354,104 @@ where
 
   let mut final_res_var: MippTUVar<E, IV> = MippTUVar {
     tc: T_var.clone(),
-    uc: U_g_product_var.clone(), // Siamo sicuri che possiamo togliere senza problemi il 'into_group'? da testare
+    uc: U_g_product_var.clone(),
   };
 
   // create new transcript inside the circuit instead of taking it from parameters
   let params: PoseidonConfig<E::BaseField> = params_to_base_field::<E>();
   let mut transcript_var = PoseidonSpongeVar::new(cs.clone(), &params);
 
-  let mut U_g_product_var_buf = Vec::new();
-    U_g_product_var.value().unwrap()
-      .serialize_with_mode(&mut U_g_product_var_buf, Compress::No)
-      .expect("serialization failed");
-  let mut U_g_product_var_bytes = Vec::new();
-  for x in U_g_product_var_buf {
-    U_g_product_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+  // FIRST ABSORB
+  let mut buf = Vec::new();
+  U //take it as naive cause we pass the byte to the hash function
+    .serialize_with_mode(&mut buf, Compress::No)
+    .expect("serialization failed");
+
+  let mut u_var_vec: Vec<UInt8<_>> = Vec::new();
+  for el in buf {
+    u_var_vec.push(UInt8::new_input(cs.clone(), || Ok(el))?);
   }
 
-  transcript_var.absorb(&U_g_product_var_bytes)?;
-  
+  println!(
+    "Circ - Prima absorb: {:?}",
+    U_g_product_var.value().unwrap().into_affine()
+  );
+  transcript_var.absorb(&u_var_vec)?;
 
-  let one_var = FpVar::new_input(cs.clone(), || Ok(E::BaseField::one()))?;
+  let one_var = NonNativeFieldVar::<E::ScalarField, E::BaseField>::new_input(cs.clone(), || {
+    Ok(E::ScalarField::one())
+  })?;
+
   for (i, (comm_u, comm_t)) in comms_u_var.iter().zip(comms_t_var.iter()).enumerate() {
     let (comm_u_l, comm_u_r) = comm_u;
     let (comm_t_l, comm_t_r) = comm_t;
-
     // Fiat-Shamir challenge
+    // ABSORB COMM_U_L
     let mut comm_u_l_buf = Vec::new();
-    comm_u_l.value().unwrap()
+    comm_u_l
+      .value()
+      .unwrap()
+      .into_affine()
       .serialize_with_mode(&mut comm_u_l_buf, Compress::No)
       .expect("serialization failed");
-    let mut comm_u_l_bytes = Vec::new();
-    for x in comm_u_l_buf {
-      comm_u_l_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
-    }
 
+    let mut comm_u_l_var_bytes = Vec::new();
+
+    for b in comm_u_l_buf {
+      comm_u_l_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(b))?);
+    }
+    transcript_var.absorb(&comm_u_l_var_bytes)?;
+    // ABSORB COMM_U_R
     let mut comm_u_r_buf = Vec::new();
-    comm_u_r.value().unwrap()
+    comm_u_r
+      .value()
+      .unwrap()
+      .into_affine()
       .serialize_with_mode(&mut comm_u_r_buf, Compress::No)
       .expect("serialization failed");
-    let mut comm_u_r_bytes = Vec::new();
-    for x in comm_u_r_buf {
-      comm_u_r_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
+
+    let mut comm_u_r_var_bytes = Vec::new();
+
+    for b in comm_u_r_buf {
+      comm_u_r_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(b))?);
     }
-
-
-    transcript_var.absorb(&comm_u_l_bytes)?;
-    transcript_var.absorb(&comm_u_r_bytes)?;
-    // ATTENTION
+    transcript_var.absorb(&comm_u_r_var_bytes)?;
+    // ABSORB COMM_T_L
     let mut comm_t_l_buf = Vec::new();
-    comm_t_l.value().unwrap()
+    comm_t_l
+      .value()
+      .unwrap()
       .serialize_with_mode(&mut comm_t_l_buf, Compress::No)
       .expect("serialization failed");
-    let mut comm_t_l_bytes = Vec::new();
-    for x in comm_t_l_buf {
-      comm_t_l_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
-    }
-    transcript_var.absorb(&comm_t_l_bytes)?;
 
+    let mut comm_t_l_var_bytes = Vec::new();
+
+    for b in comm_t_l_buf {
+      comm_t_l_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(b))?);
+    }
+    transcript_var.absorb(&comm_t_l_var_bytes)?;
+    // ABSORB COMM_T_R
     let mut comm_t_r_buf = Vec::new();
-    comm_t_r.value().unwrap()
+    comm_t_r
+      .value()
+      .unwrap()
       .serialize_with_mode(&mut comm_t_r_buf, Compress::No)
       .expect("serialization failed");
-    let mut comm_t_r_bytes = Vec::new();
-    for x in comm_t_r_buf {
-      comm_t_r_bytes.push(UInt8::new_input(cs.clone(), || Ok(x))?);
-    }
-    transcript_var.absorb(&comm_t_r_bytes)?;
 
-    let c_inv_var = transcript_var.squeeze_field_elements(1).unwrap().remove(0);
+    let mut comm_t_r_var_bytes = Vec::new();
+
+    for b in comm_t_r_buf {
+      comm_t_r_var_bytes.push(UInt8::new_input(cs.clone(), || Ok(b))?);
+    }
+
+    transcript_var.absorb(&comm_t_r_var_bytes)?;
+
+    //allocate the digest as circuit variable
+    let c_inv_nn = (transcript_var.squeeze_nonnative_field_elements::<E::ScalarField>(1)?).0;
+    let c_inv_var = &c_inv_nn[0];
+
+    println!("CIRC SQUEEZY: {:?}", c_inv_var.value().unwrap());
+
     let c_var = c_inv_var.inverse().unwrap();
 
     xs.push(c_var.clone());
@@ -435,9 +460,17 @@ where
     final_y_var *= &one_var + c_inv_var.mul(&point_var[i]) - &point_var[i];
   }
 
+  println!("CIRC FINAL_Y: {:?}", final_y_var.value().unwrap());
+
   enum Op<'a, E: Pairing, IV: PairingVar<E>> {
-    TC(&'a IV::GTVar, FpVar<<E>::BaseField>), // BigInt == FpVar<E::BaseField>
-    UC(&'a IV::G1Var, &'a FpVar<<E>::BaseField>),
+    TC(
+      &'a IV::GTVar,
+      NonNativeFieldVar<E::ScalarField, E::BaseField>,
+    ), // BigInt == FpVar<E::BaseField>
+    UC(
+      &'a IV::G1Var,
+      &'a NonNativeFieldVar<E::ScalarField, E::BaseField>,
+    ),
   }
 
   let res_var = comms_t_var
@@ -459,7 +492,6 @@ where
     .fold(MippTUVar::<E, IV>::default(), |mut res, op: Op<E, IV>| {
       match op {
         Op::TC(tx, c) => {
-          // let bits_c = c_var.to_bits_le()?; let exp = t_var.pow_le(&bits_c)?;
           let tx = tx.pow_le(&c.to_bits_le().unwrap()).unwrap();
           res.tc.mul_assign(&tx);
         }
@@ -474,15 +506,20 @@ where
   let ref_final_res_var = &mut final_res_var;
   ref_final_res_var.merge(&res_var);
 
-  let mut rs: Vec<FpVar<<E>::BaseField>> = Vec::new();
+  let mut rs = Vec::new();
   let m = xs_inv.len();
   for _i in 0..m {
-    let r = transcript_var.squeeze_field_elements(1).unwrap().remove(0);
+    let r_nn = (transcript_var.squeeze_nonnative_field_elements::<E::ScalarField>(1)?).0;
+    let r = r_nn[0].clone();
     rs.push(r);
   }
 
-  // let rs_var = rs.clone();
-  let v_var: FpVar<<E as Pairing>::BaseField> = (0..m)
+  println!("CIRC RS ");
+  for x in rs.clone() {
+    println!("{:?}", x.value().unwrap());
+  }
+
+  let v_var: NonNativeFieldVar<E::ScalarField, E::BaseField> = (0..m)
     .into_iter()
     .map(|i| &one_var + (&rs[i]).mul(&xs_inv[m - i - 1]) - &rs[i])
     .fold(one_var.clone(), |acc, x| acc * x); // .product() == fold
@@ -492,46 +529,14 @@ where
     h_product: proof.final_h,
   };
 
-  //convert naive_rs_test: Vec<E::ScalarField>, to Vec<E::BaseField>,
-
-  println!("LEN OF rs inside circuit: {}", naive_rs_test.len());
-  println!("Naive Prover rs[0] injected in the circuit");
-  println!("{}", naive_rs_test[0]);
-
-
-
-  let mut naive_rs_test_base_var = Vec::new();
-  for p in naive_rs_test.clone().into_iter(){
-      let scalar_in_fq = &E::BaseField::from_bigint(<E::BaseField as PrimeField>::BigInt::from_bits_le(p.into_bigint().to_bits_le().as_slice())).unwrap();
-      let p_var = FpVar::new_input(cs.clone(), || Ok(scalar_in_fq))?;
-      naive_rs_test_base_var.push(p_var);
-  }
-
-
-  println!("circuit VAR rs[0] after the conversion in Fp<BaseField>");
-  println!("{}", naive_rs_test_base_var[0].value().unwrap());
-
-  for i in 0..naive_rs_test_base_var.len() {
-    println!("variable: {}: {}",i,naive_rs_test_base_var[i].value().unwrap());
-    println!();
-    println!("naive: {}: {}",i, naive_rs_test[i]);
-    println!();
-  }
-  println!("ASSERT OK");
-
-
   let check_h_var = check_2_gadget::<E, IV>(
     cs.clone(),
     vk.clone(),
     &comm_h,
-    //&rs,
-    &naive_rs_test_base_var,
+    &rs,
     v_var,
     &proof.pst_proof_h,
   );
-
-
-
   let check_h = check_h_var.unwrap();
   assert!(check_h.clone() == true);
   let final_a_var = IV::G1Var::new_input(cs.clone(), || Ok(proof.final_a))?;
@@ -547,12 +552,12 @@ where
   let final_t_var = IV::pairing(final_u_var_prep, final_h_var_prep)?;
   let check_t = true;
 
-  //ref_final_res_var.tc.enforce_equal(&final_t_var).unwrap();
+  ref_final_res_var.tc.enforce_equal(&final_t_var).unwrap();
 
   assert!(check_t == true);
 
   let check_u = true;
-  //ref_final_res_var.uc.enforce_equal(&final_u_var).unwrap() {
+  ref_final_res_var.uc.enforce_equal(&final_u_var).unwrap();
 
   assert!(check_u == true);
   Ok(check_h & check_u)
@@ -612,12 +617,11 @@ mod tests {
     let (comm_list, t) = pl.commit(&ck);
 
     let params = poseidon_params();
-    let mut prover_transcript = PoseidonTranscript::new(&params);
+    let mut prover_transcript = PoseidonTranscript::new(&get_bls12377_fq_params());
 
     let (u, pst_proof, mipp_proof) = pl.open(&mut prover_transcript, comm_list, &ck, &r, &t);
 
-    let naive_rs_test = mipp_proof.rs.clone();
-    let mut verifier_transcript = PoseidonTranscript::new(&params);
+    let mut verifier_transcript = PoseidonTranscript::new(&get_bls12377_fq_params());
 
     let res = Polynomial::verify(
       &mut verifier_transcript,
@@ -629,20 +633,19 @@ mod tests {
       &mipp_proof,
       &t,
     );
+    assert!(res == true);
 
-
-    let circuit = TestudoCommVerifier {
-      vk,
-      U: u,
-      point: r,
-      v,
-      pst_proof,
-      mipp_proof,
-      T: t,
-      naive_rs_test,
-      _iv: PhantomData::<IV>,
-    };
-
+    let circuit =
+      TestudoCommVerifier::<ark_bls12_377::Bls12_377, ark_bls12_377::constraints::PairingVar> {
+        vk,
+        U: u,
+        point: r,
+        v,
+        pst_proof,
+        mipp_proof,
+        T: t,
+        _iv: PhantomData,
+      };
     let cs = ConstraintSystem::<<Bls12<ark_bls12_377::Config> as Pairing>::BaseField>::new_ref();
     circuit.generate_constraints(cs.clone()).unwrap();
     assert!(cs.is_satisfied().unwrap());

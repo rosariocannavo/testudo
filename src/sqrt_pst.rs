@@ -1,4 +1,4 @@
-use crate::mipp::{MippProof, self};
+use crate::mipp::MippProof;
 use ark_ec::{pairing::Pairing, scalar_mul::variable_base::VariableBaseMSM, CurveGroup};
 use ark_ff::One;
 use ark_poly_commit::multilinear_pc::{
@@ -167,7 +167,7 @@ impl<E: Pairing> Polynomial<E> {
 
   pub fn open(
     &mut self,
-    transcript: &mut PoseidonTranscript<E::ScalarField>,
+    transcript: &mut PoseidonTranscript<E::BaseField>,
     comm_list: Vec<Commitment<E>>,
     ck: &CommitterKey<E>,
     point: &[E::ScalarField],
@@ -211,8 +211,6 @@ impl<E: Pairing> Polynomial<E> {
     let timer_mipp_proof = Timer::new("mipp_prove");
     let mipp_proof =
       MippProof::<E>::prove(transcript, ck, comms, chis.to_vec(), h_vec, &c_u, t).unwrap();
-
-
     timer_mipp_proof.stop();
 
     let timer_proof = Timer::new("pst_open");
@@ -232,7 +230,7 @@ impl<E: Pairing> Polynomial<E> {
   }
 
   pub fn verify(
-    transcript: &mut PoseidonTranscript<E::ScalarField>,
+    transcript: &mut PoseidonTranscript<E::BaseField>,
     vk: &VerifierKey<E>,
     U: &Commitment<E>,
     point: &[E::ScalarField],
@@ -269,7 +267,7 @@ impl<E: Pairing> Polynomial<E> {
 #[cfg(test)]
 mod tests {
 
-  use crate::parameters::poseidon_params;
+  use crate::parameters::{get_bls12377_fq_params, poseidon_params};
 
   use super::*;
   type F = ark_bls12_377::Fr;
@@ -302,7 +300,7 @@ mod tests {
     check_sqrt_poly_commit(5);
 
     // check even case
-    //check_sqrt_poly_commit(6);
+    check_sqrt_poly_commit(6);
   }
 
   fn check_sqrt_poly_commit(num_vars: u32) {
@@ -324,11 +322,11 @@ mod tests {
     let (comm_list, t) = pl.commit(&ck);
 
     let params = poseidon_params();
-    let mut prover_transcript = PoseidonTranscript::new(&params);
+    let mut prover_transcript = PoseidonTranscript::new(&get_bls12377_fq_params());
 
     let (u, pst_proof, mipp_proof) = pl.open(&mut prover_transcript, comm_list, &ck, &r, &t);
 
-    let mut verifier_transcript = PoseidonTranscript::new(&params);
+    let mut verifier_transcript = PoseidonTranscript::new(&get_bls12377_fq_params());
 
     let res = Polynomial::verify(
       &mut verifier_transcript,

@@ -275,6 +275,37 @@ where
     1,
   )
 }
+pub fn get_bw6_fr_params() -> PoseidonConfig<ark_bw6_761::Fr> {
+  let arks = FR["ark"]
+    .members()
+    .map(|ark| {
+      ark
+        .members()
+        .map(|v| ark_bw6_761::Fr::from_str(v.as_str().unwrap()).unwrap())
+        .collect::<Vec<_>>()
+    })
+    .collect::<Vec<_>>();
+  let mds = FR["mds"]
+    .members()
+    .map(|m| {
+      m.members()
+        .map(|v| ark_bw6_761::Fr::from_str(v.as_str().unwrap()).unwrap())
+        .collect::<Vec<_>>()
+    })
+    .collect::<Vec<_>>();
+  PoseidonConfig::new(
+    FR["full_rounds"].as_usize().unwrap(),
+    FR["partial_rounds"].as_usize().unwrap(),
+    FR["alpha"].as_u64().unwrap(),
+    mds,
+    arks,
+    FR["rate"].as_usize().unwrap(),
+    // TODO (nikkolasg): check out the concrete parameters for the capacity
+    // so far taken from https://github.com/AleoHQ/snarkVM/blob/d6ce2d3540b9355b59ef580db998188c786f8599/fields/src/traits/poseidon_default.rs#L43
+    1,
+  )
+}
+
 pub fn get_bls12377_fq_params() -> PoseidonConfig<Fq> {
   let arks = FR["ark"]
     .members()

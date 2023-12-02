@@ -24,7 +24,6 @@ impl<F: PrimeField> Transcript for PoseidonTranscript<F> {
     point
       .serialize_with_mode(&mut buf, Compress::No)
       .expect("serialization failed");
-   
     self.sponge.absorb(&buf);
   }
 
