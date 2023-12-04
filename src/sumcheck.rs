@@ -7,11 +7,14 @@ use crate::transcript::Transcript;
 
 use super::unipoly::UniPoly;
 use ark_crypto_primitives::sponge::Absorb;
+use ark_ec::PairingFriendlyCycle;
 use ark_ff::PrimeField;
 
 use ark_serialize::*;
 
 use itertools::izip;
+
+use ark_ec::pairing::Pairing;
 
 #[derive(CanonicalSerialize, CanonicalDeserialize, Debug)]
 pub struct SumcheckInstanceProof<F: PrimeField> {
@@ -61,7 +64,7 @@ impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
 }
 
 impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
-  pub fn prove_cubic_with_additive_term<C>(
+  pub fn prove_cubic_with_additive_term<C, E>(
     claim: &F,
     num_rounds: usize,
     poly_tau: &mut DensePolynomial<F>,
@@ -69,10 +72,11 @@ impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
     poly_B: &mut DensePolynomial<F>,
     poly_C: &mut DensePolynomial<F>,
     comb_func: C,
-    transcript: &mut PoseidonTranscript<F>,
+    transcript: &mut PoseidonTranscript<E::BaseField>,
   ) -> (Self, Vec<F>, Vec<F>)
   where
     C: Fn(&F, &F, &F, &F) -> F,
+    E: Pairing,
   {
     let mut e = *claim;
     let mut r: Vec<F> = Vec::new();
@@ -118,7 +122,11 @@ impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
       let poly = UniPoly::from_evals(&evals);
 
       // append the prover's message to the transcript
-      poly.write_to_transcript(transcript);
+      //poly.write_to_transcript(transcript);
+
+      for i in 0..poly.coeffs.len() {
+        transcript.append_scalar(b"", &poly.coeffs[i]);
+      }
       //derive the verifier's challenge for the next round
       let r_j = transcript.challenge_scalar(b"");
       r.push(r_j);
@@ -376,16 +384,17 @@ impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
     )
   }
 
-  pub fn prove_quad<C>(
+  pub fn prove_quad<C, E>(
     claim: &F,
     num_rounds: usize,
     poly_A: &mut DensePolynomial<F>,
     poly_B: &mut DensePolynomial<F>,
     comb_func: C,
-    transcript: &mut PoseidonTranscript<F>,
+    transcript: &mut PoseidonTranscript<E::BaseField>,
   ) -> (Self, Vec<F>, Vec<F>)
   where
     C: Fn(&F, &F) -> F,
+    E: Pairing,
   {
     let mut e = *claim;
     let mut r: Vec<F> = Vec::new();
@@ -410,7 +419,10 @@ impl<F: PrimeField + Absorb> SumcheckInstanceProof<F> {
       let poly = UniPoly::from_evals(&evals);
 
       // append the prover's message to the transcript
-      poly.write_to_transcript(transcript);
+      //poly.write_to_transcript(transcript);
+      for i in 0..poly.coeffs.len() {
+        transcript.append_scalar(b"", &poly.coeffs[i]);
+      }
 
       //derive the verifier's challenge for the next round
       let r_j = transcript.challenge_scalar(b"");

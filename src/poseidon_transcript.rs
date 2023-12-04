@@ -30,7 +30,10 @@ impl<F: PrimeField> Transcript for PoseidonTranscript<F> {
   fn challenge_scalar<FF: PrimeField>(&mut self, _label: &'static [u8]) -> FF {
     self.sponge.squeeze_field_elements(1).remove(0)
   }
+
 }
+
+
 
 impl<F: PrimeField> PoseidonTranscript<F> {
   /// create a new transcript
@@ -47,6 +50,14 @@ impl<F: PrimeField + Absorb> PoseidonTranscript<F> {
   pub fn new_from_state(&mut self, challenge: &F) {
     self.sponge = PoseidonSponge::new(&self.params.clone());
     self.append_scalar(b"", challenge);
+  }
+
+}
+
+impl<F: PrimeField> PoseidonTranscript<F> {
+  pub fn new_from_state2<S: CanonicalSerialize>(&mut self, challenge: &S) {
+    self.sponge = PoseidonSponge::new(&self.params.clone());
+    self.append(b"", challenge);
   }
 }
 
